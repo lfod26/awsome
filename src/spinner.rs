@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::ProgressBar;
 
 /// Runs `f` to completion while animating a spinner with `message`, then
 /// clears the spinner line. `indicatif` automatically falls back to a
@@ -12,11 +12,6 @@ use indicatif::{ProgressBar, ProgressStyle};
 /// so scripted usage stays clean.
 pub fn with_spinner<T>(message: &str, f: impl FnOnce() -> T) -> T {
     let spinner = ProgressBar::new_spinner();
-    spinner.set_style(
-        ProgressStyle::with_template("{spinner} {msg}")
-            .expect("static template is valid")
-            .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
-    );
     spinner.set_message(message.to_string());
     spinner.enable_steady_tick(Duration::from_millis(80));
 
@@ -25,4 +20,3 @@ pub fn with_spinner<T>(message: &str, f: impl FnOnce() -> T) -> T {
     spinner.finish_and_clear();
     result
 }
-

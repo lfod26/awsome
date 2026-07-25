@@ -139,7 +139,7 @@ impl Ec2Instance {
                 echo 'Shutdown already scheduled, leaving it as-is:'; \
                 echo \"$show\"; \
              else \
-                shutdown -h +{minutes} 'Auto-shutdown scheduled by aws-util' && \
+                shutdown -h +{minutes} 'Auto-shutdown scheduled by awsome' && \
                 echo 'Scheduled shutdown at {target_time} (in {minutes} minute(s)).'; \
              fi"
         );

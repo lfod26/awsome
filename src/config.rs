@@ -10,7 +10,7 @@ use super::{
     interactive::{select, select_index},
 };
 
-const CONFIG_NAME: &str = "aws_util_conf.json";
+const CONFIG_NAME: &str = "awsome_conf.json";
 
 fn get_profile(profile: Option<String>) -> Result<String> {
     let profiles = list_profiles()?;
@@ -71,14 +71,14 @@ impl std::fmt::Display for ProfileGroup {
 /// pairings. Supports multiple groups so this tool can manage more than
 /// one instance (each possibly under a different AWS CLI profile).
 #[derive(Serialize, Deserialize, Default)]
-pub struct AwsUtilConfig {
+pub struct AwsomeConfig {
     #[serde(default)]
     selected: usize,
     #[serde(default)]
     groups: Vec<ProfileGroup>,
 }
 
-impl AwsUtilConfig {
+impl AwsomeConfig {
     /// Returns the currently selected group, per the `selected` index.
     /// Callers must ensure the config is non-empty first (see
     /// [`is_empty`](Self::is_empty)). If `selected` is out of range (e.g.
@@ -104,7 +104,7 @@ impl AwsUtilConfig {
     /// interactively.
     pub fn set_selected(&mut self, index: Option<usize>) -> Result<()> {
         if self.groups.is_empty() {
-            println!("No configuration found. Run `aws-util configure add` first.");
+            println!("No configuration found. Run `awsome configure add` first.");
             return Ok(());
         }
 
@@ -194,7 +194,7 @@ impl AwsUtilConfig {
 
     pub fn show(&self) {
         if self.groups.is_empty() {
-            println!("No configuration found. Run `aws-util configure add` first.");
+            println!("No configuration found. Run `awsome configure add` first.");
             return;
         }
 
@@ -237,7 +237,7 @@ impl AwsUtilConfig {
         let contents = std::fs::read_to_string(&path)
             .with_context(|| format!("failed to open config file at {}", path.display()))?;
 
-        match serde_json::from_str::<AwsUtilConfig>(&contents) {
+        match serde_json::from_str::<AwsomeConfig>(&contents) {
             Ok(config) => Ok(config),
             Err(err) => {
                 let backup_path = path.with_extension("json.bak");

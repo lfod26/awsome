@@ -12,7 +12,7 @@ use clap::Parser;
 use console::style;
 
 use cli::{Cli, Command};
-use config::AwsUtilConfig;
+use config::AwsomeConfig;
 
 use crate::client::Ec2Instance;
 
@@ -24,7 +24,7 @@ fn main() -> Result<()> {
         schedule_shutdown: None,
     });
 
-    let mut config = AwsUtilConfig::load()?;
+    let mut config = AwsomeConfig::load()?;
 
     if let Command::Configure { action } = command {
         return match action {
@@ -42,7 +42,7 @@ fn main() -> Result<()> {
     }
 
     if config.is_empty() {
-        println!("No configuration found. Run `aws-util configure add` first.");
+        println!("No configuration found. Run `awsome configure add` first.");
         return Ok(());
     }
 

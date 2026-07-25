@@ -1,4 +1,4 @@
-# aws-util
+# awsome
 
 A small Rust CLI that starts or stops one or more pre-configured AWS EC2
 instances and waits for them to reach the desired state — a typed,
@@ -13,16 +13,16 @@ aws ec2 start-instances --instance-ids %INSTANCE_ID% --profile %PROFILE% --no-cl
 aws ec2 wait instance-running --instance-ids %INSTANCE_ID% --profile %PROFILE%
 ```
 
-`aws-util` remembers one or more profile+instance pairs in a small config
+`awsome` remembers one or more profile+instance pairs in a small config
 file next to the executable, so day-to-day usage is just:
 
 ```sh
-aws-util
+awsome
 ```
 
 ## How it works
 
-`aws-util` does **not** use the AWS SDK. It shells out to the `aws` CLI
+`awsome` does **not** use the AWS SDK. It shells out to the `aws` CLI
 (`aws ec2 describe-instances`, `start-instances`, `stop-instances`, and
 `wait instance-running`/`instance-stopped`) and parses the JSON output.
 This means:
@@ -46,14 +46,14 @@ This means:
 cargo build --release
 ```
 
-The resulting binary is at `target/release/aws-util.exe` (Windows) or
-`target/release/aws-util` (Linux/macOS). Copy it wherever you like — the
+The resulting binary is at `target/release/awsome.exe` (Windows) or
+`target/release/awsome` (Linux/macOS). Copy it wherever you like — the
 config file lives next to it (see [Configuration](#configuration)).
 
 ## Usage
 
 ```
-aws-util [COMMAND]
+awsome [COMMAND]
 ```
 
 | Command | Behavior |
@@ -64,26 +64,26 @@ aws-util [COMMAND]
 | `configure` | Runs the interactive setup: add a new profile/instance pair, or pick an existing one to replace, then fuzzy-search/select an AWS CLI profile and an instance. Only configures — does not start or stop anything. |
 | `sso-login` | Login-only command. Checks status first; if not logged in, runs `aws sso login --profile <profile>`. |
 
-If no profile/instance pair is configured yet, running `aws-util`,
-`aws-util sso-login`, `aws-util start`, or `aws-util stop`
+If no profile/instance pair is configured yet, running `awsome`,
+`awsome sso-login`, `awsome start`, or `awsome stop`
 will print:
 
 ```
-No configuration found. Run `aws-util configure` first.
+No configuration found. Run `awsome configure` first.
 ```
 
-and exit without prompting — run `aws-util configure` to set it up.
+and exit without prompting — run `awsome configure` to set it up.
 
 ### Login behavior
 
-For `start` (with or without `--schedule-shutdown`) and `stop`, `aws-util` checks
+For `start` (with or without `--schedule-shutdown`) and `stop`, `awsome` checks
 whether the selected profile is already logged in. If it is not, it
 prints a message and starts `aws sso login` automatically before
 continuing with the requested operation.
 
 ### Multiple profiles/instances
 
-`aws-util` can manage more than one EC2 instance (each under its own AWS
+`awsome` can manage more than one EC2 instance (each under its own AWS
 CLI profile, or even multiple instances under the same profile):
 
 - If exactly **one** profile/instance pair is configured, it's used
@@ -101,7 +101,7 @@ CLI profile, or even multiple instances under the same profile):
 ### First-time setup
 
 ```sh
-aws-util configure
+awsome configure
 ```
 
 If any profile/instance pairs are already configured, you'll first be
@@ -117,10 +117,10 @@ add another pair or change an existing one.
 
 ## Configuration
 
-`aws-util` reads/writes a JSON config file named `aws_util_conf.json`:
+`awsome` reads/writes a JSON config file named `awsome_conf.json`:
 
 - **Release builds:** next to the executable (same directory as
-  `aws-util.exe`).
+  `awsome.exe`).
 - **Debug builds (`cargo run`):** in the current working directory, for
   convenience during development.
 
@@ -136,10 +136,10 @@ add another pair or change an existing one.
 
 `selected` is the 0-based index of the group that `start`/`stop` act on. It's
 set via `configure select` (and shown by `configure show`). If it's ever out
-of range, `aws-util` warns, reverts to the first group, and writes that back.
+of range, `awsome` warns, reverts to the first group, and writes that back.
 
 A genuinely corrupt/unparseable file is backed up to
-`aws_util_conf.json.bak` with a warning instead of crashing, and treated
+`awsome_conf.json.bak` with a warning instead of crashing, and treated
 as if no config existed.
 
 The config file is git-ignored (see `.gitignore`) since it's
@@ -149,15 +149,15 @@ machine/user-specific.
 ## Auto-shutdown via SSM
 
 Rather than running a background service on your machine to watch for
-shutdown/logoff (complex, and platform-specific), `aws-util` can tell
+shutdown/logoff (complex, and platform-specific), `awsome` can tell
 the **EC2 instance itself** to shut down at a given local clock time:
 
 ```sh
-aws-util start --schedule-shutdown          # shuts down at 18:30 (today, or tomorrow if already past)
-aws-util start --schedule-shutdown 20:00    # shuts down at 20:00 (today, or tomorrow if already past)
+awsome start --schedule-shutdown          # shuts down at 18:30 (today, or tomorrow if already past)
+awsome start --schedule-shutdown 20:00    # shuts down at 20:00 (today, or tomorrow if already past)
 ```
 
-`aws-util` computes the delay from your machine's current local time to
+`awsome` computes the delay from your machine's current local time to
 the next occurrence of that clock time, then sends a small shell script
 to the instance via [AWS Systems Manager
 Run Command](https://docs.aws.amazon.com/systems-manager/latest/userguide/execute-remote-commands.html)
@@ -178,7 +178,7 @@ with a clear error. Currently Linux/systemd only.
 
 ## Interrupting (Ctrl+C)
 
-`aws-util` installs a Ctrl+C handler that restores the terminal cursor
+`awsome` installs a Ctrl+C handler that restores the terminal cursor
 (in case it was hidden by an interactive prompt) and exits cleanly with
 code 130, instead of leaving the terminal in a bad state.
 

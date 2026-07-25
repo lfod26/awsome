@@ -9,7 +9,7 @@ use clap::{Parser, Subcommand};
 /// first.
 #[derive(Parser)]
 #[command(
-    name = "aws-util",
+    name = "awsome",
     about = "Manage a configured EC2 instance via `aws` CLI subcommands",
     version
 )]

@@ -52,8 +52,8 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          $exeName = "aws-util-$env:VERSION-windows-x86_64.exe"
-          Copy-Item target/release/aws-util.exe $exeName
+          $exeName = "awsome-$env:VERSION-windows-x86_64.exe"
+          Copy-Item target/release/awsome.exe $exeName
           echo "EXE_NAME=$exeName" >> $env:GITHUB_ENV
 
       - name: Create and push tag

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::client::{describe_instances, list_profiles};
+use crate::client::{describe_instances, ensure_logged_in, list_profiles};
 
 use super::{
     client::InstanceEntry,
@@ -126,7 +126,7 @@ impl AwsomeConfig {
 
         self.save()?;
 
-        println!("✅ Selected {}", self.groups[self.selected]);
+        println!("✔️ Selected {}", self.groups[self.selected]);
 
         Ok(())
     }
@@ -137,6 +137,7 @@ impl AwsomeConfig {
 
     pub fn add(&mut self, profile: Option<String>, instance_id: Option<String>) -> Result<()> {
         let profile = get_profile(profile)?;
+        ensure_logged_in(&profile)?;
         let instance_id = get_instance(&profile, instance_id)?;
 
         let group = ProfileGroup {
@@ -150,7 +151,7 @@ impl AwsomeConfig {
 
         self.save()?;
 
-        println!("✅ Added {group_str}");
+        println!("✔️ Added {group_str}");
 
         Ok(())
     }
@@ -187,7 +188,7 @@ impl AwsomeConfig {
 
         self.save()?;
 
-        println!("✅ Removed {removed}");
+        println!("✔️ Removed {removed}");
 
         Ok(())
     }
@@ -267,7 +268,7 @@ impl AwsomeConfig {
         serde_json::to_writer_pretty(file, self)
             .with_context(|| format!("failed to write config file at {}", path.display()))?;
 
-        println!("✅ Saved config to {}", path.display());
+        println!("✔️ Saved config to {}", path.display());
         Ok(())
     }
 }

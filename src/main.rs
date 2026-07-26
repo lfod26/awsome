@@ -42,7 +42,7 @@ fn main() -> Result<()> {
     }
 
     if config.is_empty() {
-        println!("No configuration found. Run `awsome configure add` first.");
+        println!("⚠️ No configuration found. Run `awsome configure add` first.");
         return Ok(());
     }
 
@@ -51,23 +51,6 @@ fn main() -> Result<()> {
     let instance_id = &selected_conf.instance_id;
 
     match command {
-        Command::Stop => {
-            let ec2 = Ec2Instance::new_logged_in(profile, instance_id)?;
-
-            if let Some(state) = ec2.state()?
-                && state == "stopped"
-            {
-                println!(
-                    "Instance {instance_id} is already {}.",
-                    style("stopped").red()
-                );
-            } else {
-                ec2.stop_and_wait()?;
-            }
-
-            Ok(())
-        }
-
         Command::Start { schedule_shutdown } => {
             let ec2 = Ec2Instance::new_logged_in(profile, instance_id)?;
 
@@ -85,6 +68,23 @@ fn main() -> Result<()> {
             if let Some(time_str) = schedule_shutdown {
                 let (minutes, target_time) = schedule::minutes_until_next(&time_str)?;
                 ec2.schedule_shutdown(minutes, &target_time.format("%H:%M").to_string())?;
+            }
+
+            Ok(())
+        }
+
+        Command::Stop => {
+            let ec2 = Ec2Instance::new_logged_in(profile, instance_id)?;
+
+            if let Some(state) = ec2.state()?
+                && state == "stopped"
+            {
+                println!(
+                    "Instance {instance_id} is already {}.",
+                    style("stopped").red()
+                );
+            } else {
+                ec2.stop_and_wait()?;
             }
 
             Ok(())

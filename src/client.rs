@@ -5,7 +5,7 @@ use anyhow::{Context, Result, bail};
 use console::style;
 
 use super::{
-    aws_command::{AwsCliError, AwsCommand, CommandInvocation, DescribeInstancesOutput},
+    aws_command::{AwsCliError, AwsCommand, CommandInvocation},
     spinner::with_spinner,
 };
 
@@ -29,7 +29,11 @@ impl std::fmt::Display for InstanceEntry {
 /// an unexpected CLI error - is propagated instead of being silently
 /// treated as "not logged in".
 pub fn is_logged_in(profile: &str) -> Result<bool> {
-    if let Err(err) = AwsCommand::get_caller_identity(profile) {
+    let caller_identity = with_spinner("Fetching caller identity...", || {
+        AwsCommand::get_caller_identity(profile)
+    });
+
+    if let Err(err) = caller_identity {
         return if AwsCliError::needs_login(&err) {
             Ok(false)
         } else {
@@ -40,9 +44,12 @@ pub fn is_logged_in(profile: &str) -> Result<bool> {
     Ok(true)
 }
 
-fn sso_login(profile: &str) -> Result<()> {
-    let output = AwsCommand::sso_login(profile)?;
-    println!("{}", &output);
+/// Ensures the profile has valid credentials, running an SSO login if not.
+pub fn ensure_logged_in(profile: &str) -> Result<()> {
+    if !is_logged_in(profile)? {
+        println!("ℹ️  Profile `{profile}` is not logged in. Starting AWS SSO login...");
+        AwsCommand::sso_login(profile)?;
+    }
 
     Ok(())
 }
@@ -58,10 +65,7 @@ impl Ec2Instance {
     pub fn new_logged_in(profile: &str, instance_id: &str) -> Result<Self> {
         let (profile, instance_id) = (profile.to_string(), instance_id.to_string());
 
-        if !is_logged_in(&profile)? {
-            println!("ℹ️  Profile `{profile}` is not logged in. Starting AWS SSO login...");
-            sso_login(&profile)?;
-        }
+        ensure_logged_in(&profile)?;
 
         Ok(Self {
             profile,
@@ -85,10 +89,7 @@ impl Ec2Instance {
         AwsCommand::start_instances(&self.profile, &self.instance_id)?;
 
         with_spinner(
-            &format!(
-                "Waiting for instance {} to reach 'running'...",
-                &self.instance_id
-            ),
+            &format!("Waiting for instance {} to start...", &self.instance_id),
             || AwsCommand::wait_instance_running(&self.profile, &self.instance_id),
         )?;
 
@@ -107,10 +108,7 @@ impl Ec2Instance {
         AwsCommand::stop_instances(&self.profile, &self.instance_id)?;
 
         with_spinner(
-            &format!(
-                "Waiting for instance {} to reach 'stopped'...",
-                &self.instance_id
-            ),
+            &format!("Waiting for instance {} to stop...", &self.instance_id),
             || AwsCommand::wait_instance_stopped(&self.profile, &self.instance_id),
         )?;
 
@@ -212,8 +210,9 @@ pub fn list_profiles() -> Result<Vec<String>> {
 /// Runs `describe-instances`, optionally scoped to a single instance
 /// ID, mapping the result down to `InstanceEntry`.
 pub fn describe_instances(profile: &str, with_id: Option<&str>) -> Result<Vec<InstanceEntry>> {
-    let out: DescribeInstancesOutput =
-        AwsCommand::describe_instances(profile, with_id).context("failed to describe instances")?;
+    let out = with_spinner("Fetching instances...", || {
+        AwsCommand::describe_instances(profile, with_id).context("failed to describe instances")
+    })?;
 
     let entries = out
         .reservations

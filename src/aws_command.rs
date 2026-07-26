@@ -1,6 +1,6 @@
 use std::process::{Command, Output};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
@@ -192,6 +192,24 @@ impl AwsCommand {
             .with_context(|| format!("`{}` returned non-UTF-8 output", self.command_line()))
     }
 
+    /// Runs the command with inherited stdio, streaming its output straight
+    /// to the terminal and capturing nothing. Used for interactive commands
+    /// like `aws sso login`, which print a verification URL/code and wait for
+    /// the user to authenticate in a browser - the user must see that output
+    /// live, so it can't be captured and printed only after the process ends.
+    fn status(mut self) -> Result<()> {
+        let status = self
+            .cmd
+            .status()
+            .with_context(|| format!("failed to run `{}`", self.command_line()))?;
+
+        if !status.success() {
+            bail!("`{}` failed", self.command_line());
+        }
+
+        Ok(())
+    }
+
     fn output_json<T: DeserializeOwned>(mut self) -> Result<T> {
         self.cmd.arg("--output").arg("json");
         let output = self.run()?;
@@ -219,13 +237,13 @@ impl AwsCommand {
             .output_text()
     }
 
-    pub fn sso_login(profile: &str) -> Result<String> {
+    pub fn sso_login(profile: &str) -> Result<()> {
         Self::new()
             .arg("sso")
             .arg("login")
             .arg("--no-cli-pager")
             .add_profile(profile)
-            .output_text()
+            .status()
     }
 
     /// Runs `sts get-caller-identity` for `profile`. Succeeds if the profile

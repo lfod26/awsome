@@ -35,7 +35,10 @@ fn main() -> Result<()> {
 
             cli::ConfigureAction::Remove { index } => config.remove(index),
 
-            cli::ConfigureAction::Show => Ok(config.show()),
+            cli::ConfigureAction::Show => {
+                config.show();
+                Ok(())
+            }
 
             cli::ConfigureAction::Select { index } => config.set_selected(index),
         };

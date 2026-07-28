@@ -357,3 +357,117 @@ impl AwsCommand {
             .output_json()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn err(stderr: &str) -> AwsCliError {
+        AwsCliError::classify(
+            "aws sts get-caller-identity".to_string(),
+            stderr.to_string(),
+        )
+    }
+
+    #[test]
+    fn classify_flags_each_credential_marker() {
+        let markers = [
+            "The SSO session associated with this profile has expired or is otherwise invalid.",
+            "Error loading SSO Token: Token for does not exist",
+            "Token has expired and refresh failed",
+            "The security token included in the request is expired",
+            "Unable to locate credentials. You can configure credentials by running \"aws configure\".",
+        ];
+
+        for marker in markers {
+            assert!(
+                err(marker).needs_login,
+                "expected needs_login for stderr: {marker}"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_is_case_insensitive() {
+        assert!(err("TOKEN HAS EXPIRED AND REFRESH FAILED").needs_login);
+    }
+
+    #[test]
+    fn classify_ignores_unrelated_errors() {
+        assert!(!err("An error occurred (InvalidInstanceID.NotFound)").needs_login);
+    }
+
+    #[test]
+    fn classify_stores_command_and_stderr_verbatim() {
+        let e = err("some failure");
+        assert_eq!(e.command, "aws sts get-caller-identity");
+        assert_eq!(e.stderr, "some failure");
+    }
+
+    #[test]
+    fn needs_login_helper_matches_only_login_errors() {
+        let login: anyhow::Error = err("Token has expired").into();
+        assert!(AwsCliError::needs_login(&login));
+
+        let other_cli: anyhow::Error = err("some unrelated failure").into();
+        assert!(!AwsCliError::needs_login(&other_cli));
+
+        let non_cli = anyhow::anyhow!("io error: file not found");
+        assert!(!AwsCliError::needs_login(&non_cli));
+    }
+
+    #[test]
+    fn display_distinguishes_login_from_plain_failure() {
+        let login = err("Token has expired");
+        let shown = login.to_string();
+        assert!(shown.contains("an SSO login is needed"), "{shown}");
+        assert!(shown.contains("Token has expired"), "{shown}");
+
+        let plain = err("boom");
+        let shown = plain.to_string();
+        assert!(!shown.contains("SSO login"), "{shown}");
+        assert!(shown.contains("boom"), "{shown}");
+    }
+
+    #[test]
+    fn deserializes_describe_instances_output() {
+        let json = r#"{
+            "Reservations": [
+                {
+                    "Instances": [
+                        {
+                            "InstanceId": "i-aaa",
+                            "State": { "Name": "running" },
+                            "Tags": [
+                                { "Key": "Name", "Value": "web-server" },
+                                { "Key": "env", "Value": "dev" }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "Instances": [
+                        {
+                            "InstanceId": "i-bbb",
+                            "State": { "Name": "stopped" }
+                        }
+                    ]
+                }
+            ]
+        }"#;
+
+        let out: DescribeInstancesOutput = serde_json::from_str(json).unwrap();
+        assert_eq!(out.reservations.len(), 2);
+
+        let first = &out.reservations[0].instances[0];
+        assert_eq!(first.instance_id, "i-aaa");
+        assert_eq!(first.state.name, "running");
+        let tags = first.tags.as_ref().unwrap();
+        assert_eq!(tags[0].key, "Name");
+        assert_eq!(tags[0].value, "web-server");
+
+        let second = &out.reservations[1].instances[0];
+        assert_eq!(second.instance_id, "i-bbb");
+        assert!(second.tags.is_none());
+    }
+}

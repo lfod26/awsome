@@ -1,75 +1,109 @@
 name: Release
 
 # Manually triggered from the Actions UI. Reads the version straight
-# from Cargo.toml (the single source of truth), creates a matching git
-# tag if one doesn't already exist, builds a Windows release binary, and
-# publishes it as a GitHub Release.
+# from Cargo.toml (the single source of truth), builds release binaries
+# for Windows (x86_64) and macOS (ARM), and — only once every build
+# succeeds — creates a matching git tag and publishes a GitHub Release.
 on:
   workflow_dispatch:
 
 jobs:
-  build-and-release:
-    runs-on: windows-latest
+  ci:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ci.outputs.version }}
+      tag: ${{ steps.ci.outputs.tag }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Run test + lint checks
+        id: ci
+        uses: ./.github/actions/ci
+
+  build:
+    needs: ci
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            asset_suffix: windows-x86_64
+            binary_ext: .exe
+          - os: macos-latest
+            asset_suffix: macos-aarch64
+            binary_ext: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Set up Rust toolchain and cache
+        uses: ./.github/actions/ci
+        with:
+          test: "false"
+
+      - name: Build release binary
+        shell: bash
+        run: cargo build --release --locked
+
+      - name: Rename binary with version
+        id: rename
+        shell: bash
+        env:
+          VERSION: ${{ needs.ci.outputs.version }}
+          ASSET_SUFFIX: ${{ matrix.asset_suffix }}
+          BINARY_EXT: ${{ matrix.binary_ext }}
+        run: |
+          asset_name="awsome-$VERSION-$ASSET_SUFFIX$BINARY_EXT"
+          cp "target/release/awsome$BINARY_EXT" "$asset_name"
+          echo "asset_name=$asset_name" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ steps.rename.outputs.asset_name }}
+          path: ${{ steps.rename.outputs.asset_name }}
+          if-no-files-found: error
+
+  release:
+    needs: [ci, build]
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - name: Check out repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-
-      - name: Read version from Cargo.toml
-        id: version
-        shell: pwsh
-        run: |
-          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
-          $tag = "v$version"
-          echo "version=$version" >> $env:GITHUB_OUTPUT
-          echo "tag=$tag" >> $env:GITHUB_OUTPUT
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Check tag does not already exist
-        shell: pwsh
+        shell: bash
         env:
-          TAG: ${{ steps.version.outputs.tag }}
+          TAG: ${{ needs.ci.outputs.tag }}
         run: |
-          $exists = git ls-remote --tags origin $env:TAG
-          if ($exists) {
-            Write-Error "Tag '$env:TAG' already exists. Bump the version in Cargo.toml before releasing again."
+          if git ls-remote --tags origin "$TAG" | grep -q .; then
+            echo "Tag '$TAG' already exists. Bump the version in Cargo.toml before releasing again." >&2
             exit 1
-          }
+          fi
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+      - name: Download build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          toolchain: stable
-
-      - name: Cache cargo registry and build artifacts
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
-
-      - name: Build release binary
-        run: cargo build --release --locked
-
-      - name: Rename binary with version
-        shell: pwsh
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          $exeName = "awsome-$env:VERSION-windows-x86_64.exe"
-          Copy-Item target/release/awsome.exe $exeName
-          echo "EXE_NAME=$exeName" >> $env:GITHUB_ENV
+          path: artifacts
+          merge-multiple: true
 
       - name: Create and push tag
-        shell: pwsh
+        shell: bash
         env:
-          TAG: ${{ steps.version.outputs.tag }}
+          TAG: ${{ needs.ci.outputs.tag }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag $env:TAG
-          git push origin $env:TAG
+          git tag "$TAG"
+          git push origin "$TAG"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
         with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          files: ${{ env.EXE_NAME }}
+          tag_name: ${{ needs.ci.outputs.tag }}
+          files: artifacts/*
           generate_release_notes: true
           draft: true

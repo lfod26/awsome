@@ -1,0 +1,18 @@
+name: Test
+
+# Runs the shared test + lint checks on every push to main and on every
+# pull request so regressions are caught before they reach a release.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Run test + lint checks
+        uses: ./.github/actions/ci

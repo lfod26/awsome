@@ -175,22 +175,29 @@ impl AwsomeConfig {
             select_index("group to remove", &self.groups)?
         };
 
-        let removed = self.groups.remove(remove_index);
-
-        // Keep `selected` pointing at the same logical group where
-        // possible: shift it down if an earlier group was removed, or
-        // reset to the first group if the selected one itself was removed.
-        if remove_index < self.selected {
-            self.selected -= 1;
-        } else if remove_index == self.selected {
-            self.selected = 0;
-        }
+        let removed = self.remove_group(remove_index);
 
         self.save()?;
 
         println!("✔️ Removed {removed}");
 
         Ok(())
+    }
+
+    /// Removes the group at `index`, keeping `selected` pointed at the same
+    /// logical group where possible: shift it down if an earlier group was
+    /// removed, or reset to the first group if the selected one itself was
+    /// removed. Returns the removed group. Does not persist - callers save.
+    fn remove_group(&mut self, index: usize) -> ProfileGroup {
+        let removed = self.groups.remove(index);
+
+        if index < self.selected {
+            self.selected -= 1;
+        } else if index == self.selected {
+            self.selected = 0;
+        }
+
+        removed
     }
 
     pub fn show(&self) {
@@ -270,5 +277,97 @@ impl AwsomeConfig {
 
         println!("✔️ Saved config to {}", path.display());
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn group(profile: &str, instance_id: &str) -> ProfileGroup {
+        ProfileGroup {
+            profile: profile.to_string(),
+            instance_id: instance_id.to_string(),
+        }
+    }
+
+    #[test]
+    fn config_serde_round_trips_object_format() {
+        let config = AwsomeConfig {
+            selected: 1,
+            groups: vec![group("a", "i-a"), group("b", "i-b")],
+        };
+
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("\"selected\""), "{json}");
+        assert!(json.contains("\"groups\""), "{json}");
+
+        let back: AwsomeConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.selected, 1);
+        assert_eq!(back.groups.len(), 2);
+        assert_eq!(back.groups[0].profile, "a");
+        assert_eq!(back.groups[1].instance_id, "i-b");
+    }
+
+    #[test]
+    fn empty_object_deserializes_to_default() {
+        let config: AwsomeConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(config.selected, 0);
+        assert!(config.groups.is_empty());
+    }
+
+    #[test]
+    fn missing_selected_defaults_to_zero() {
+        let json = r#"{ "groups": [ { "profile": "a", "instance_id": "i-a" } ] }"#;
+        let config: AwsomeConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.selected, 0);
+        assert_eq!(config.groups.len(), 1);
+    }
+
+    #[test]
+    fn remove_group_shifts_selection_down_when_earlier_group_removed() {
+        let mut config = AwsomeConfig {
+            selected: 2,
+            groups: vec![group("a", "i-a"), group("b", "i-b"), group("c", "i-c")],
+        };
+
+        let removed = config.remove_group(0);
+        assert_eq!(removed.profile, "a");
+        // "c" was selected (index 2); after dropping "a" it's now index 1.
+        assert_eq!(config.selected, 1);
+        assert_eq!(config.groups.len(), 2);
+        assert_eq!(config.groups[config.selected].profile, "c");
+    }
+
+    #[test]
+    fn remove_group_resets_selection_when_selected_group_removed() {
+        let mut config = AwsomeConfig {
+            selected: 1,
+            groups: vec![group("a", "i-a"), group("b", "i-b"), group("c", "i-c")],
+        };
+
+        config.remove_group(1);
+        assert_eq!(config.selected, 0);
+        assert_eq!(config.groups[config.selected].profile, "a");
+    }
+
+    #[test]
+    fn remove_group_keeps_selection_when_later_group_removed() {
+        let mut config = AwsomeConfig {
+            selected: 0,
+            groups: vec![group("a", "i-a"), group("b", "i-b"), group("c", "i-c")],
+        };
+
+        config.remove_group(2);
+        assert_eq!(config.selected, 0);
+        assert_eq!(config.groups[config.selected].profile, "a");
+    }
+
+    #[test]
+    fn profile_group_display() {
+        assert_eq!(
+            group("james-bond", "i-045").to_string(),
+            "james-bond (i-045)"
+        );
     }
 }

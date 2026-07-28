@@ -1,0 +1,50 @@
+name: CI checks
+description: Install the Rust toolchain (and cache) and optionally run formatting, clippy, and test checks.
+
+inputs:
+  test:
+    description: Run the formatting, clippy, and test checks.
+    default: "true"
+
+outputs:
+  version:
+    description: The package version read from Cargo.toml.
+    value: ${{ steps.version.outputs.version }}
+  tag:
+    description: The release tag (the version prefixed with "v").
+    value: ${{ steps.version.outputs.tag }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+      with:
+        toolchain: stable
+        components: rustfmt, clippy
+
+    - name: Cache cargo registry and build artifacts
+      uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+
+    - name: Read version from Cargo.toml
+      id: version
+      shell: bash
+      run: |
+        version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+        echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+    - name: Check formatting
+      if: inputs.test == 'true'
+      shell: bash
+      run: cargo fmt --all --check
+
+    - name: Run clippy
+      if: inputs.test == 'true'
+      shell: bash
+      run: cargo clippy --all-targets --locked -- -D warnings
+
+    - name: Run tests
+      if: inputs.test == 'true'
+      shell: bash
+      run: cargo test --locked

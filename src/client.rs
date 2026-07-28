@@ -5,7 +5,7 @@ use anyhow::{Context, Result, bail};
 use console::style;
 
 use super::{
-    aws_command::{AwsCliError, AwsCommand, CommandInvocation},
+    aws_command::{AwsCliError, AwsCommand, CommandInvocation, DescribeInstancesOutput},
     spinner::with_spinner,
 };
 
@@ -77,7 +77,7 @@ impl Ec2Instance {
     /// instance, or `None` if it doesn't exist.
     pub fn state(&self) -> Result<Option<String>> {
         let entries = describe_instances(&self.profile, Some(&self.instance_id))
-            .with_context(|| format!("failed to describe instance {}", &self.instance_id))?;
+            .with_context(|| format!("failed to describe instance {}", self.instance_id))?;
 
         Ok(entries.into_iter().next().map(|e| e.state))
     }
@@ -85,17 +85,17 @@ impl Ec2Instance {
     /// Starts this instance and waits until it reaches the `running`
     /// state.
     pub fn start_and_wait(&self) -> Result<()> {
-        println!("Starting instance {}...", &self.instance_id);
+        println!("Starting instance {}...", self.instance_id);
         AwsCommand::start_instances(&self.profile, &self.instance_id)?;
 
         with_spinner(
-            &format!("Waiting for instance {} to start...", &self.instance_id),
+            &format!("Waiting for instance {} to start...", self.instance_id),
             || AwsCommand::wait_instance_running(&self.profile, &self.instance_id),
         )?;
 
         println!(
             "Instance {} is now {}.",
-            &self.instance_id,
+            self.instance_id,
             style("running").green()
         );
         Ok(())
@@ -104,17 +104,17 @@ impl Ec2Instance {
     /// Stops this instance and waits until it reaches the `stopped`
     /// state.
     pub fn stop_and_wait(&self) -> Result<()> {
-        println!("Stopping instance {}...", &self.instance_id);
+        println!("Stopping instance {}...", self.instance_id);
         AwsCommand::stop_instances(&self.profile, &self.instance_id)?;
 
         with_spinner(
-            &format!("Waiting for instance {} to stop...", &self.instance_id),
+            &format!("Waiting for instance {} to stop...", self.instance_id),
             || AwsCommand::wait_instance_stopped(&self.profile, &self.instance_id),
         )?;
 
         println!(
             "Instance {} is now {}.",
-            &self.instance_id,
+            self.instance_id,
             style("stopped").red()
         );
         Ok(())
@@ -144,7 +144,7 @@ impl Ec2Instance {
 
         println!(
             "Sending SSM command to schedule shutdown on {}...",
-            &self.instance_id
+            self.instance_id
         );
         let params = format!("commands=[\"{script}\"]");
         let send_output =
@@ -154,7 +154,7 @@ impl Ec2Instance {
         let wait_result = with_spinner(
             &format!(
                 "Waiting for the SSM command on {} to finish...",
-                &self.instance_id
+                self.instance_id
             ),
             || AwsCommand::wait_command_executed(&self.profile, &command_id, &self.instance_id),
         );
@@ -173,7 +173,7 @@ impl Ec2Instance {
             bail!(
                 "SSM command to schedule shutdown on {} did not succeed \
                  (status: {}): {}",
-                &self.instance_id,
+                self.instance_id,
                 invocation.status,
                 invocation
                     .standard_error_content
@@ -190,12 +190,7 @@ impl Ec2Instance {
 pub fn list_profiles() -> Result<Vec<String>> {
     let stdout = AwsCommand::list_profiles()?;
 
-    let profiles: Vec<String> = stdout
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(String::from)
-        .collect();
+    let profiles = parse_profiles(&stdout);
 
     if profiles.is_empty() {
         bail!(
@@ -207,6 +202,17 @@ pub fn list_profiles() -> Result<Vec<String>> {
     Ok(profiles)
 }
 
+/// Parses `aws configure list-profiles` stdout into a list of profile
+/// names, trimming each line and dropping blank ones.
+fn parse_profiles(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(String::from)
+        .collect()
+}
+
 /// Runs `describe-instances`, optionally scoped to a single instance
 /// ID, mapping the result down to `InstanceEntry`.
 pub fn describe_instances(profile: &str, with_id: Option<&str>) -> Result<Vec<InstanceEntry>> {
@@ -214,8 +220,14 @@ pub fn describe_instances(profile: &str, with_id: Option<&str>) -> Result<Vec<In
         AwsCommand::describe_instances(profile, with_id).context("failed to describe instances")
     })?;
 
-    let entries = out
-        .reservations
+    Ok(map_instances(out))
+}
+
+/// Flattens `describe-instances` JSON output into `InstanceEntry` values,
+/// pulling each instance's `Name` tag (falling back to a placeholder when
+/// there isn't one).
+fn map_instances(out: DescribeInstancesOutput) -> Vec<InstanceEntry> {
+    out.reservations
         .into_iter()
         .flat_map(|r| r.instances)
         .map(|i| {
@@ -234,7 +246,72 @@ pub fn describe_instances(profile: &str, with_id: Option<&str>) -> Result<Vec<In
                 state: i.state.name,
             }
         })
-        .collect();
+        .collect()
+}
 
-    Ok(entries)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_profiles_trims_and_drops_blank_lines() {
+        let stdout = "default\n  james-bond  \n\n\tother-profile\n   \n";
+        assert_eq!(
+            parse_profiles(stdout),
+            vec!["default", "james-bond", "other-profile"]
+        );
+    }
+
+    #[test]
+    fn parse_profiles_empty_input_yields_empty() {
+        assert!(parse_profiles("").is_empty());
+        assert!(parse_profiles("   \n\t\n").is_empty());
+    }
+
+    #[test]
+    fn map_instances_extracts_name_tag_and_flattens_reservations() {
+        let json = r#"{
+            "Reservations": [
+                {
+                    "Instances": [
+                        {
+                            "InstanceId": "i-withname",
+                            "State": { "Name": "running" },
+                            "Tags": [
+                                { "Key": "env", "Value": "dev" },
+                                { "Key": "Name", "Value": "web-server" }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "Instances": [
+                        {
+                            "InstanceId": "i-noname",
+                            "State": { "Name": "stopped" }
+                        }
+                    ]
+                }
+            ]
+        }"#;
+        let out: DescribeInstancesOutput = serde_json::from_str(json).unwrap();
+
+        let entries = map_instances(out);
+        assert_eq!(entries.len(), 2);
+
+        assert_eq!(entries[0].instance_id, "i-withname");
+        assert_eq!(entries[0].name, "web-server");
+        assert_eq!(entries[0].state, "running");
+
+        assert_eq!(entries[1].instance_id, "i-noname");
+        assert_eq!(entries[1].name, "(no Name tag)");
+        assert_eq!(entries[1].state, "stopped");
+    }
+
+    #[test]
+    fn map_instances_empty_output_yields_empty() {
+        let out: DescribeInstancesOutput =
+            serde_json::from_str(r#"{ "Reservations": [] }"#).unwrap();
+        assert!(map_instances(out).is_empty());
+    }
 }

@@ -197,13 +197,13 @@ impl AwsCommand {
     /// like `aws sso login`, which print a verification URL/code and wait for
     /// the user to authenticate in a browser - the user must see that output
     /// live, so it can't be captured and printed only after the process ends.
-    fn status(mut self) -> Result<()> {
+    fn inherit_stdio(mut self, check_status: bool) -> Result<()> {
         let status = self
             .cmd
             .status()
             .with_context(|| format!("failed to run `{}`", self.command_line()))?;
 
-        if !status.success() {
+        if check_status && !status.success() {
             bail!("`{}` failed", self.command_line());
         }
 
@@ -243,7 +243,7 @@ impl AwsCommand {
             .arg("login")
             .arg("--no-cli-pager")
             .add_profile(profile)
-            .status()
+            .inherit_stdio(true)
     }
 
     /// Runs `sts get-caller-identity` for `profile`. Succeeds if the profile
@@ -309,8 +309,14 @@ impl AwsCommand {
     pub fn send_shell_script_command(
         profile: &str,
         instance_id: &str,
-        parameters: &str,
+        script: &str,
     ) -> Result<SendCommandOutput> {
+        Self::send_shell_script(profile, instance_id, script).output_json()
+    }
+
+    fn send_shell_script(profile: &str, instance_id: &str, script: &str) -> Self {
+        let parameters = serde_json::json!({ "commands": [script] }).to_string();
+
         Self::new()
             .arg("ssm")
             .arg("send-command")
@@ -319,16 +325,11 @@ impl AwsCommand {
             .arg("--document-name")
             .arg("AWS-RunShellScript")
             .arg("--parameters")
-            .arg(parameters)
+            .arg(&parameters)
             .add_profile(profile)
-            .output_json()
     }
 
-    pub fn wait_command_executed(
-        profile: &str,
-        command_id: &str,
-        instance_id: &str,
-    ) -> Result<String> {
+    pub fn wait_command_executed(profile: &str, command_id: &str, instance_id: &str) -> Result<()> {
         Self::new()
             .arg("ssm")
             .arg("wait")
@@ -338,7 +339,7 @@ impl AwsCommand {
             .arg("--instance-id")
             .arg(instance_id)
             .add_profile(profile)
-            .output_text()
+            .inherit_stdio(false)
     }
 
     pub fn get_command_invocation(
@@ -355,6 +356,29 @@ impl AwsCommand {
             .arg(instance_id)
             .add_profile(profile)
             .output_json()
+    }
+
+    /// Opens an SSH-over-SSM tunnel to `instance_id` using the
+    /// `AWS-StartSSHSession` document, bridging the SSH byte stream over this
+    /// process's inherited stdio. `port` is the TCP port SSH wants on the
+    /// instance (typically 22). Blocks until the session ends.
+    ///
+    /// Requires the AWS CLI Session Manager plugin to be installed.
+    pub fn start_ssh_session(profile: &str, instance_id: &str, port: u16) -> Result<()> {
+        Self::ssh_session(profile, instance_id, port).inherit_stdio(true)
+    }
+
+    fn ssh_session(profile: &str, instance_id: &str, port: u16) -> Self {
+        Self::new()
+            .arg("ssm")
+            .arg("start-session")
+            .arg("--target")
+            .arg(instance_id)
+            .arg("--document-name")
+            .arg("AWS-StartSSHSession")
+            .arg("--parameters")
+            .arg(&format!("portNumber={port}"))
+            .add_profile(profile)
     }
 }
 
@@ -469,5 +493,28 @@ mod tests {
         let second = &out.reservations[1].instances[0];
         assert_eq!(second.instance_id, "i-bbb");
         assert!(second.tags.is_none());
+    }
+
+    #[test]
+    fn builds_ssm_run_command_with_a_json_script_parameter() {
+        let command =
+            AwsCommand::send_shell_script("development", "i-abc", "echo 'hello'").command_line();
+
+        assert_eq!(
+            command,
+            "aws ssm send-command --instance-ids i-abc --document-name AWS-RunShellScript \
+             --parameters {\"commands\":[\"echo 'hello'\"]} --profile development"
+        );
+    }
+
+    #[test]
+    fn builds_ssh_session_command_for_the_requested_port() {
+        let command = AwsCommand::ssh_session("development", "i-abc", 2222).command_line();
+
+        assert_eq!(
+            command,
+            "aws ssm start-session --target i-abc --document-name AWS-StartSSHSession \
+             --parameters portNumber=2222 --profile development"
+        );
     }
 }

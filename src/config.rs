@@ -1,57 +1,16 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
+use console::style;
 use serde::{Deserialize, Serialize};
 
-use crate::client::{describe_instances, ensure_logged_in, list_profiles};
-
 use super::{
-    client::InstanceEntry,
-    interactive::{select, select_index},
+    client::{describe_instances, ensure_logged_in, list_profiles},
+    interactive::select_index,
+    logger_success,
 };
 
 const CONFIG_NAME: &str = "awsome_conf.json";
-
-fn get_profile(profile: Option<String>) -> Result<String> {
-    let profiles = list_profiles()?;
-
-    if let Some(p) = profile {
-        if !profiles.iter().any(|s| s == &p) {
-            bail!(
-                "AWS CLI profile `{p}` was not found. Available profiles: {}",
-                profiles.join(", ")
-            );
-        }
-
-        return Ok(p.to_string());
-    }
-
-    let profile = select("profile", profiles)?;
-
-    println!("Selected profile: {profile}");
-
-    Ok(profile)
-}
-
-fn get_instance(profile: &str, instance_id: Option<String>) -> Result<String> {
-    let instances = describe_instances(profile, None)?;
-
-    if let Some(i_id) = instance_id {
-        if instances.iter().any(|i| i.instance_id == i_id) {
-            return Ok(i_id.to_string());
-        }
-
-        bail!("EC2 instance `{i_id}` was not found under profile `{profile}`.");
-    }
-
-    let InstanceEntry {
-        instance_id, name, ..
-    } = select("instance", instances)?;
-
-    println!("Selected instance: {name} ({instance_id})");
-
-    Ok(instance_id)
-}
 
 /// A single profile + instance pairing that `start`/`stop` can act on.
 #[derive(Serialize, Deserialize, Clone)]
@@ -62,7 +21,12 @@ pub struct ProfileGroup {
 
 impl std::fmt::Display for ProfileGroup {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} ({})", self.profile, self.instance_id)
+        write!(
+            f,
+            "{} {}",
+            style(&self.instance_id).dim(),
+            style(&self.profile).underlined()
+        )
     }
 }
 
@@ -78,67 +42,72 @@ pub struct AwsomeConfig {
     groups: Vec<ProfileGroup>,
 }
 
-impl AwsomeConfig {
-    /// Returns the currently selected group, per the `selected` index.
-    /// Callers must ensure the config is non-empty first (see
-    /// [`is_empty`](Self::is_empty)). If `selected` is out of range (e.g.
-    /// after groups were removed, or a hand-edited config), a warning is
-    /// printed, `selected` reverts to the first group, and that correction
-    /// is written back to the config file.
-    pub fn selected_group(&mut self) -> Result<&ProfileGroup> {
-        if self.selected >= self.groups.len() {
-            eprintln!(
-                "⚠️  Selected group #{} is out of range ({} configured). Using the first one.",
-                self.selected + 1,
-                self.groups.len()
-            );
-            self.selected = 0;
-            self.save()?;
-        }
-
-        Ok(&self.groups[self.selected])
-    }
-
-    /// Sets which group `start`/`stop` act on and persists it. `index` is
-    /// 1-based (as shown by `configure show`); if omitted, prompts
-    /// interactively.
-    pub fn set_selected(&mut self, index: Option<usize>) -> Result<()> {
+impl std::fmt::Display for AwsomeConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.groups.is_empty() {
-            println!("No configuration found. Run `awsome configure add` first.");
-            return Ok(());
+            return write!(f, "{} empty configuration", style("i").blue());
         }
 
-        let selected = if let Some(i) = index {
-            if i == 0 || i > self.groups.len() {
-                self.show();
-                bail!(
-                    "Index {i} is out of range (expected 1-{})",
-                    self.groups.len()
-                );
+        for (i, pg) in self.groups.iter().enumerate() {
+            let idx = i + 1;
+            let bold_idx = style(idx).bold();
+
+            if i == self.selected {
+                write!(f, "{}. {} {pg}", bold_idx, style("✓").green())?;
+            } else {
+                write!(f, "{}.   {pg}", bold_idx)?;
             }
 
-            i - 1
+            if idx != self.groups.len() {
+                writeln!(f)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl AwsomeConfig {
+    pub fn get_selected(&self) -> Result<&ProfileGroup> {
+        self.ensure_groups_exist()?;
+
+        self.groups.get(self.selected).with_context(|| {
+            format!(
+                "config corruption: selected config index (#{}) \
+                is out of bounds",
+                self.selected + 1
+            )
+        })
+    }
+
+    pub fn set_selected(&mut self, idx: Option<usize>) -> Result<()> {
+        self.ensure_groups_exist()?;
+
+        let selected_idx = if let Some(i) = idx {
+            i.checked_sub(1)
+                .context("expected an index number greater than 0")?
         } else {
-            select_index("group to select", &self.groups)?
+            select_index("config to select", &self.groups)?
         };
 
-        self.selected = selected;
+        let group = self.groups.get(selected_idx).with_context(|| {
+            format!(
+                "#{} is out of index for the current configuration",
+                selected_idx + 1
+            )
+        })?;
+
+        self.selected = selected_idx;
 
         self.save()?;
 
-        println!("✔️ Selected {}", self.groups[self.selected]);
+        logger_success!("selected {group}");
 
         Ok(())
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.groups.is_empty()
-    }
-
     pub fn add(&mut self, profile: Option<String>, instance_id: Option<String>) -> Result<()> {
-        let profile = get_profile(profile)?;
-        ensure_logged_in(&profile)?;
-        let instance_id = get_instance(&profile, instance_id)?;
+        let (profile, instance_id) = Self::resolve_profile_and_instance_id(profile, instance_id)?;
 
         let group = ProfileGroup {
             profile,
@@ -151,69 +120,106 @@ impl AwsomeConfig {
 
         self.save()?;
 
-        println!("✔️ Added {group_str}");
+        logger_success!("added {group_str}");
 
         Ok(())
     }
 
-    pub fn remove(&mut self, index: Option<usize>) -> Result<()> {
-        if self.groups.is_empty() {
-            println!("No configuration found. Nothing to remove.");
-            return Ok(());
-        }
+    pub fn remove(&mut self, idx: Option<usize>) -> Result<()> {
+        self.ensure_groups_exist()?;
 
-        let remove_index = if let Some(i) = index {
-            if i == 0 || i > self.groups.len() {
-                bail!(
-                    "Index {i} is out of range (expected 1-{})",
-                    self.groups.len()
-                );
-            }
-
-            i - 1
+        let selected_idx = if let Some(i) = idx {
+            i.checked_sub(1)
+                .context("expected an index number greater than 0")?
         } else {
-            select_index("group to remove", &self.groups)?
+            select_index("config to remove", &self.groups)?
         };
 
-        let removed = self.remove_group(remove_index);
+        let group = self.remove_group(selected_idx)?;
 
         self.save()?;
 
-        println!("✔️ Removed {removed}");
+        logger_success!("removed {group}");
 
         Ok(())
     }
 
-    /// Removes the group at `index`, keeping `selected` pointed at the same
-    /// logical group where possible: shift it down if an earlier group was
-    /// removed, or reset to the first group if the selected one itself was
-    /// removed. Returns the removed group. Does not persist - callers save.
-    fn remove_group(&mut self, index: usize) -> ProfileGroup {
-        let removed = self.groups.remove(index);
+    fn resolve_profile_and_instance_id(
+        profile: Option<String>,
+        instance_id: Option<String>,
+    ) -> Result<(String, String)> {
+        let profiles = list_profiles()?;
 
-        if index < self.selected {
-            self.selected -= 1;
-        } else if index == self.selected {
-            self.selected = 0;
-        }
+        let profile = if let Some(p) = profile {
+            if !profiles.iter().any(|s| s == &p) {
+                bail!(
+                    "AWS CLI profile {p} was not found. Available profiles: {}",
+                    profiles.join(", ")
+                );
+            }
 
-        removed
+            p
+        } else {
+            let idx = select_index("profile", &profiles)?;
+
+            let p = profiles
+                .into_iter()
+                .nth(idx)
+                .context("failed to get profile")?;
+
+            logger_success!("selected profile {p}");
+
+            p
+        };
+
+        ensure_logged_in(&profile)?;
+
+        let instances = describe_instances(&profile, None)?;
+
+        let instance_id = if let Some(i_id) = instance_id {
+            if !instances.iter().any(|i| i.instance_id == i_id) {
+                bail!("EC2 instance {i_id} was not found under profile `{profile}`.");
+            }
+
+            i_id
+        } else {
+            let idx = select_index("instance", &instances)?;
+
+            let inst = instances
+                .into_iter()
+                .nth(idx)
+                .context("failed to get instance")?;
+
+            logger_success!("selected instance {inst}");
+
+            inst.instance_id
+        };
+
+        Ok((profile, instance_id))
     }
 
-    pub fn show(&self) {
-        if self.groups.is_empty() {
-            println!("No configuration found. Run `awsome configure add` first.");
-            return;
+    fn remove_group(&mut self, idx: usize) -> Result<ProfileGroup> {
+        if idx >= self.groups.len() {
+            bail!("index out of bounds for available configs");
         }
 
-        for (i, group) in self.groups.iter().enumerate() {
-            let marker = if i == self.selected {
-                " (selected)"
-            } else {
-                ""
-            };
-            println!("{}. {group}{marker}", i + 1);
+        if idx == self.selected {
+            bail!("index cannot be the same as the selected config");
         }
+
+        if idx < self.selected {
+            self.selected -= 1;
+        }
+
+        Ok(self.groups.remove(idx))
+    }
+
+    fn ensure_groups_exist(&self) -> Result<()> {
+        if self.groups.is_empty() {
+            bail!("no configured groups available");
+        }
+
+        Ok(())
     }
 
     fn resolve_path() -> std::io::Result<PathBuf> {
@@ -231,10 +237,7 @@ impl AwsomeConfig {
     }
 
     /// Loads the config file next to the executable. Returns a default
-    /// (empty) config when there is no config file yet. If genuinely
-    /// malformed JSON is found, the invalid file is backed up (so it
-    /// isn't silently lost), a warning is printed, and an empty config is
-    /// returned.
+    /// (empty) config when there is no config file yet.
     pub fn load() -> Result<Self> {
         let path = Self::resolve_path().context("failed to resolve config file path")?;
 
@@ -245,38 +248,18 @@ impl AwsomeConfig {
         let contents = std::fs::read_to_string(&path)
             .with_context(|| format!("failed to open config file at {}", path.display()))?;
 
-        match serde_json::from_str::<AwsomeConfig>(&contents) {
-            Ok(config) => Ok(config),
-            Err(err) => {
-                let backup_path = path.with_extension("json.bak");
-                match std::fs::rename(&path, &backup_path) {
-                    Ok(()) => eprintln!(
-                        "⚠️  Config file at {} is invalid ({err}). \
-                         Backed it up to {} and will reconfigure.",
-                        path.display(),
-                        backup_path.display()
-                    ),
-                    Err(rename_err) => eprintln!(
-                        "⚠️  Config file at {} is invalid ({err}), and it could not be \
-                         backed up ({rename_err}). It will be overwritten when reconfiguring.",
-                        path.display()
-                    ),
-                }
-                Ok(Self::default())
-            }
-        }
+        serde_json::from_str::<AwsomeConfig>(&contents).map_err(Into::into)
     }
 
     /// Saves this config to the config file next to the executable.
     pub fn save(&self) -> Result<()> {
         let path = Self::resolve_path().context("failed to resolve config file path")?;
+
         let file = std::fs::File::create(&path)
             .with_context(|| format!("failed to create config file at {}", path.display()))?;
-        serde_json::to_writer_pretty(file, self)
-            .with_context(|| format!("failed to write config file at {}", path.display()))?;
 
-        println!("✔️ Saved config to {}", path.display());
-        Ok(())
+        serde_json::to_writer_pretty(file, self)
+            .with_context(|| format!("failed to write config file at {}", path.display()))
     }
 }
 
@@ -331,7 +314,7 @@ mod tests {
             groups: vec![group("a", "i-a"), group("b", "i-b"), group("c", "i-c")],
         };
 
-        let removed = config.remove_group(0);
+        let removed = config.remove_group(0).unwrap();
         assert_eq!(removed.profile, "a");
         // "c" was selected (index 2); after dropping "a" it's now index 1.
         assert_eq!(config.selected, 1);
@@ -340,15 +323,16 @@ mod tests {
     }
 
     #[test]
-    fn remove_group_resets_selection_when_selected_group_removed() {
+    fn remove_group_errors_when_removing_selected_group() {
         let mut config = AwsomeConfig {
             selected: 1,
             groups: vec![group("a", "i-a"), group("b", "i-b"), group("c", "i-c")],
         };
 
-        config.remove_group(1);
-        assert_eq!(config.selected, 0);
-        assert_eq!(config.groups[config.selected].profile, "a");
+        assert!(config.remove_group(1).is_err());
+        // Nothing should have changed on error.
+        assert_eq!(config.selected, 1);
+        assert_eq!(config.groups.len(), 3);
     }
 
     #[test]
@@ -358,7 +342,7 @@ mod tests {
             groups: vec![group("a", "i-a"), group("b", "i-b"), group("c", "i-c")],
         };
 
-        config.remove_group(2);
+        config.remove_group(2).unwrap();
         assert_eq!(config.selected, 0);
         assert_eq!(config.groups[config.selected].profile, "a");
     }
@@ -366,8 +350,35 @@ mod tests {
     #[test]
     fn profile_group_display() {
         assert_eq!(
-            group("james-bond", "i-045").to_string(),
-            "james-bond (i-045)"
+            console::strip_ansi_codes(&group("james-bond", "i-045").to_string()),
+            "i-045 james-bond"
         );
+    }
+
+    #[test]
+    fn get_selected_rejects_an_out_of_bounds_persisted_selection() {
+        let config = AwsomeConfig {
+            selected: 1,
+            groups: vec![group("a", "i-a")],
+        };
+
+        let error = match config.get_selected() {
+            Ok(_) => panic!("expected an out-of-bounds selected group to fail"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("config corruption"), "{error}");
+        assert!(error.contains("#2"), "{error}");
+    }
+
+    #[test]
+    fn remove_group_rejects_an_out_of_bounds_index_without_mutating_config() {
+        let mut config = AwsomeConfig {
+            selected: 0,
+            groups: vec![group("a", "i-a")],
+        };
+
+        assert!(config.remove_group(1).is_err());
+        assert_eq!(config.groups.len(), 1);
+        assert_eq!(config.selected, 0);
     }
 }

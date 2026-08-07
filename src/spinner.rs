@@ -10,9 +10,12 @@ use indicatif::ProgressBar;
 /// clears the spinner line. `indicatif` automatically falls back to a
 /// single static line when output isn't a terminal (piped/redirected),
 /// so scripted usage stays clean.
-pub fn with_spinner<T>(message: &str, f: impl FnOnce() -> T) -> T {
+pub fn with_spinner<T>(message: impl Into<String>, f: impl FnOnce() -> T) -> T {
+    let mut message = message.into();
+    message.push_str("...");
+
     let spinner = ProgressBar::new_spinner();
-    spinner.set_message(message.to_string());
+    spinner.set_message(message);
     spinner.enable_steady_tick(Duration::from_millis(80));
 
     let result = f();

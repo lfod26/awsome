@@ -105,8 +105,7 @@ jobs:
         working-directory: artifacts
         run: |
           cosign sign-blob --yes \
-            --output-signature SHA256SUMS.sig \
-            --output-certificate SHA256SUMS.pem \
+            --bundle SHA256SUMS.bundle \
             SHA256SUMS
 
       - name: Create and push tag

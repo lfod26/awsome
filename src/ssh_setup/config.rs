@@ -4,6 +4,7 @@
 use std::fs;
 
 use anyhow::{Context, Result, bail};
+use console::style;
 
 use super::{
     super::{logger_info, logger_success},
@@ -40,12 +41,12 @@ pub fn ensure_ssh_config(paths: &SshPaths) -> Result<()> {
 
         logger_success!(
             "updated {} with a managed `Host {HOST_ALIAS}` entry.",
-            paths.config.display()
+            style(paths.config.display()).dim()
         );
     } else {
         logger_info!(
             "`Host {HOST_ALIAS}` entry in {} is already up to date",
-            paths.config.display()
+            style(paths.config.display()).dim()
         );
     }
 

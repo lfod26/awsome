@@ -6,6 +6,7 @@ use console::style;
 
 use super::{
     aws_command::{AwsCliError, AwsCommand, DescribeInstancesOutput},
+    logger::{bold, dim_under},
     logger_info, logger_success, logger_warn,
     spinner::with_spinner,
 };
@@ -18,7 +19,12 @@ pub struct InstanceEntry {
 
 impl std::fmt::Display for InstanceEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({}) {}", self.instance_id, self.name)
+        write!(
+            f,
+            "{} {}",
+            dim_under(&self.instance_id),
+            style(&self.name).italic()
+        )
     }
 }
 
@@ -48,7 +54,7 @@ pub fn is_logged_in(profile: &str) -> Result<bool> {
 /// Ensures the profile has valid credentials, running an SSO login if not.
 pub fn ensure_logged_in(profile: &str) -> Result<()> {
     if !is_logged_in(profile)? {
-        logger_info!("profile {profile} is not logged in");
+        logger_info!("profile {} is not logged in", bold(profile));
         AwsCommand::sso_login(profile)?;
     }
 
@@ -77,7 +83,7 @@ impl Ec2Instance {
     /// Fetches the current state (e.g. "running", "stopped") of this
     /// instance, erroring if the instance doesn't exist.
     fn state(&self) -> Result<String> {
-        logger_info!("checking instance {} state", self.instance_id);
+        logger_info!("checking instance {} state", dim_under(&self.instance_id));
 
         // (should only return one instance)
         let instances = describe_instances(&self.profile, Some(&self.instance_id))
@@ -95,24 +101,31 @@ impl Ec2Instance {
     pub fn start_and_wait(&self, print_if_running: bool) -> Result<()> {
         if self.state()? == "running" {
             if print_if_running {
-                logger_warn!("instance {} is already running", self.instance_id);
+                logger_warn!(
+                    "instance {} is already running",
+                    dim_under(&self.instance_id)
+                );
             }
 
             return Ok(());
         }
 
-        with_spinner(format!("starting instance {}", self.instance_id), || {
-            AwsCommand::start_instances(&self.profile, &self.instance_id)
-        })?;
+        with_spinner(
+            format!("starting instance {}", dim_under(&self.instance_id)),
+            || AwsCommand::start_instances(&self.profile, &self.instance_id),
+        )?;
 
         with_spinner(
-            format!("waiting for instance {} to start", self.instance_id),
+            format!(
+                "waiting for instance {} to start",
+                dim_under(&self.instance_id)
+            ),
             || AwsCommand::wait_instance_running(&self.profile, &self.instance_id),
         )?;
 
         logger_success!(
             "instance {} is now {}.",
-            self.instance_id,
+            dim_under(&self.instance_id),
             style("running").green()
         );
         Ok(())
@@ -123,24 +136,31 @@ impl Ec2Instance {
     pub fn stop_and_wait(&self, print_if_stopped: bool) -> Result<()> {
         if self.state()? == "stopped" {
             if print_if_stopped {
-                logger_warn!("instance {} is already stopped", self.instance_id);
+                logger_warn!(
+                    "instance {} is already stopped",
+                    dim_under(&self.instance_id)
+                );
             }
 
             return Ok(());
         }
 
-        with_spinner(format!("stopping instance {}", self.instance_id), || {
-            AwsCommand::stop_instances(&self.profile, &self.instance_id)
-        })?;
+        with_spinner(
+            format!("stopping instance {}", dim_under(&self.instance_id)),
+            || AwsCommand::stop_instances(&self.profile, &self.instance_id),
+        )?;
 
         with_spinner(
-            format!("waiting for instance {} to stop", self.instance_id),
+            format!(
+                "waiting for instance {} to stop",
+                dim_under(&self.instance_id)
+            ),
             || AwsCommand::wait_instance_stopped(&self.profile, &self.instance_id),
         )?;
 
         logger_success!(
             "instance {} is now {}.",
-            self.instance_id,
+            dim_under(&self.instance_id),
             style("stopped").red()
         );
         Ok(())
@@ -148,7 +168,10 @@ impl Ec2Instance {
 
     fn run_ssm_shell_script(&self, script: &str) -> Result<()> {
         let cmd_output = with_spinner(
-            format!("sending shell command to instance {}", self.instance_id),
+            format!(
+                "sending shell command to instance {}",
+                dim_under(&self.instance_id)
+            ),
             || AwsCommand::send_shell_script_command(&self.profile, &self.instance_id, script),
         )?;
 
@@ -157,7 +180,7 @@ impl Ec2Instance {
         with_spinner(
             format!(
                 "waiting for the SSM command on {} to finish",
-                self.instance_id
+                dim_under(&self.instance_id)
             ),
             || AwsCommand::wait_command_executed(&self.profile, &cmd_id, &self.instance_id),
         )?;
@@ -231,7 +254,10 @@ impl Ec2Instance {
     pub fn push_public_key(&self, script: &str) -> Result<()> {
         self.start_and_wait(false)?;
 
-        logger_info!("installing the public key on {} via SSM", self.instance_id);
+        logger_info!(
+            "installing the public key on {} via SSM",
+            dim_under(&self.instance_id)
+        );
 
         self.run_ssm_shell_script(script)?;
 

@@ -83,7 +83,10 @@ pub fn ensure_local_ssh_key_exists(paths: &SshPaths) -> Result<()> {
 
     generate_key(&paths.private_key)?;
 
-    logger_success!("generated a new SSH key at {}", paths.private_key.display());
+    logger_success!(
+        "generated a new SSH key at {}",
+        style(paths.private_key.display()).dim()
+    );
 
     Ok(())
 }

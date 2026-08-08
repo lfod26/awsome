@@ -1,12 +1,13 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
-use console::style;
+use console::{strip_ansi_codes, style};
 use serde::{Deserialize, Serialize};
 
 use super::{
     client::{describe_instances, ensure_logged_in, list_profiles},
     interactive::select_index,
+    logger::{bold, dim_under},
     logger_success,
 };
 
@@ -24,8 +25,8 @@ impl std::fmt::Display for ProfileGroup {
         write!(
             f,
             "{} {}",
-            style(&self.instance_id).dim(),
-            style(&self.profile).underlined()
+            dim_under(&self.instance_id),
+            bold(&self.profile)
         )
     }
 }
@@ -42,6 +43,7 @@ pub struct AwsomeConfig {
     groups: Vec<ProfileGroup>,
 }
 
+// TODO: Idea: instead of complicating select, we could display this, then split it by new lines and strip ANSI
 impl std::fmt::Display for AwsomeConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.groups.is_empty() {
@@ -50,7 +52,8 @@ impl std::fmt::Display for AwsomeConfig {
 
         for (i, pg) in self.groups.iter().enumerate() {
             let idx = i + 1;
-            let bold_idx = style(idx).bold();
+            let str_idx = idx.to_string();
+            let bold_idx = bold(&str_idx);
 
             if i == self.selected {
                 write!(f, "{}. {} {pg}", bold_idx, style("✓").green())?;
@@ -87,7 +90,7 @@ impl AwsomeConfig {
             i.checked_sub(1)
                 .context("expected an index number greater than 0")?
         } else {
-            select_index("config to select", &self.groups)?
+            select_index("config to select", self.to_ansi_stripped_lines())?
         };
 
         let group = self.groups.get(selected_idx).with_context(|| {
@@ -132,7 +135,7 @@ impl AwsomeConfig {
             i.checked_sub(1)
                 .context("expected an index number greater than 0")?
         } else {
-            select_index("config to remove", &self.groups)?
+            select_index("config to remove", self.to_ansi_stripped_lines())?
         };
 
         let group = self.remove_group(selected_idx)?;
@@ -167,7 +170,7 @@ impl AwsomeConfig {
                 .nth(idx)
                 .context("failed to get profile")?;
 
-            logger_success!("selected profile {p}");
+            logger_success!("selected profile {}", bold(&p));
 
             p
         };
@@ -183,7 +186,12 @@ impl AwsomeConfig {
 
             i_id
         } else {
-            let idx = select_index("instance", &instances)?;
+            let idx = select_index(
+                "instance",
+                instances
+                    .iter()
+                    .map(|v| strip_ansi_codes(&v.to_string()).into_owned()),
+            )?;
 
             let inst = instances
                 .into_iter()
@@ -260,6 +268,13 @@ impl AwsomeConfig {
 
         serde_json::to_writer_pretty(file, self)
             .with_context(|| format!("failed to write config file at {}", path.display()))
+    }
+
+    fn to_ansi_stripped_lines(&self) -> Vec<String> {
+        self.to_string()
+            .lines()
+            .map(|l| strip_ansi_codes(l).into_owned())
+            .collect()
     }
 }
 
@@ -350,7 +365,7 @@ mod tests {
     #[test]
     fn profile_group_display() {
         assert_eq!(
-            console::strip_ansi_codes(&group("james-bond", "i-045").to_string()),
+            strip_ansi_codes(&group("james-bond", "i-045").to_string()),
             "i-045 james-bond"
         );
     }

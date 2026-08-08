@@ -5,7 +5,9 @@ use anyhow::{Context, Result, bail};
 use console::style;
 
 use super::{
-    aws_command::{AwsCliError, AwsCommand, CommandInvocation, DescribeInstancesOutput},
+    aws_command::{AwsCliError, AwsCommand, DescribeInstancesOutput},
+    logger::{bold, dim_under},
+    logger_info, logger_success, logger_warn,
     spinner::with_spinner,
 };
 
@@ -17,7 +19,12 @@ pub struct InstanceEntry {
 
 impl std::fmt::Display for InstanceEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({}) {}", self.instance_id, self.name)
+        write!(
+            f,
+            "{} {}",
+            dim_under(&self.instance_id),
+            style(&self.name).italic()
+        )
     }
 }
 
@@ -29,7 +36,7 @@ impl std::fmt::Display for InstanceEntry {
 /// an unexpected CLI error - is propagated instead of being silently
 /// treated as "not logged in".
 pub fn is_logged_in(profile: &str) -> Result<bool> {
-    let caller_identity = with_spinner("Fetching caller identity...", || {
+    let caller_identity = with_spinner("fetching caller identity", || {
         AwsCommand::get_caller_identity(profile)
     });
 
@@ -47,7 +54,7 @@ pub fn is_logged_in(profile: &str) -> Result<bool> {
 /// Ensures the profile has valid credentials, running an SSO login if not.
 pub fn ensure_logged_in(profile: &str) -> Result<()> {
     if !is_logged_in(profile)? {
-        println!("ℹ️  Profile `{profile}` is not logged in. Starting AWS SSO login...");
+        logger_info!("profile {} is not logged in", bold(profile));
         AwsCommand::sso_login(profile)?;
     }
 
@@ -74,28 +81,51 @@ impl Ec2Instance {
     }
 
     /// Fetches the current state (e.g. "running", "stopped") of this
-    /// instance, or `None` if it doesn't exist.
-    pub fn state(&self) -> Result<Option<String>> {
-        let entries = describe_instances(&self.profile, Some(&self.instance_id))
+    /// instance, erroring if the instance doesn't exist.
+    fn state(&self) -> Result<String> {
+        logger_info!("checking instance {} state", dim_under(&self.instance_id));
+
+        // (should only return one instance)
+        let instances = describe_instances(&self.profile, Some(&self.instance_id))
             .with_context(|| format!("failed to describe instance {}", self.instance_id))?;
 
-        Ok(entries.into_iter().next().map(|e| e.state))
+        instances
+            .into_iter()
+            .next()
+            .map(|e| e.state)
+            .with_context(|| format!("instance {} was not found", self.instance_id))
     }
 
     /// Starts this instance and waits until it reaches the `running`
     /// state.
-    pub fn start_and_wait(&self) -> Result<()> {
-        println!("Starting instance {}...", self.instance_id);
-        AwsCommand::start_instances(&self.profile, &self.instance_id)?;
+    pub fn start_and_wait(&self, print_if_running: bool) -> Result<()> {
+        if self.state()? == "running" {
+            if print_if_running {
+                logger_warn!(
+                    "instance {} is already running",
+                    dim_under(&self.instance_id)
+                );
+            }
+
+            return Ok(());
+        }
 
         with_spinner(
-            &format!("Waiting for instance {} to start...", self.instance_id),
+            format!("starting instance {}", dim_under(&self.instance_id)),
+            || AwsCommand::start_instances(&self.profile, &self.instance_id),
+        )?;
+
+        with_spinner(
+            format!(
+                "waiting for instance {} to start",
+                dim_under(&self.instance_id)
+            ),
             || AwsCommand::wait_instance_running(&self.profile, &self.instance_id),
         )?;
 
-        println!(
-            "Instance {} is now {}.",
-            self.instance_id,
+        logger_success!(
+            "instance {} is now {}.",
+            dim_under(&self.instance_id),
             style("running").green()
         );
         Ok(())
@@ -103,20 +133,88 @@ impl Ec2Instance {
 
     /// Stops this instance and waits until it reaches the `stopped`
     /// state.
-    pub fn stop_and_wait(&self) -> Result<()> {
-        println!("Stopping instance {}...", self.instance_id);
-        AwsCommand::stop_instances(&self.profile, &self.instance_id)?;
+    pub fn stop_and_wait(&self, print_if_stopped: bool) -> Result<()> {
+        if self.state()? == "stopped" {
+            if print_if_stopped {
+                logger_warn!(
+                    "instance {} is already stopped",
+                    dim_under(&self.instance_id)
+                );
+            }
+
+            return Ok(());
+        }
 
         with_spinner(
-            &format!("Waiting for instance {} to stop...", self.instance_id),
+            format!("stopping instance {}", dim_under(&self.instance_id)),
+            || AwsCommand::stop_instances(&self.profile, &self.instance_id),
+        )?;
+
+        with_spinner(
+            format!(
+                "waiting for instance {} to stop",
+                dim_under(&self.instance_id)
+            ),
             || AwsCommand::wait_instance_stopped(&self.profile, &self.instance_id),
         )?;
 
-        println!(
-            "Instance {} is now {}.",
-            self.instance_id,
+        logger_success!(
+            "instance {} is now {}.",
+            dim_under(&self.instance_id),
             style("stopped").red()
         );
+        Ok(())
+    }
+
+    fn run_ssm_shell_script(&self, script: &str) -> Result<()> {
+        let cmd_output = with_spinner(
+            format!(
+                "sending shell command to instance {}",
+                dim_under(&self.instance_id)
+            ),
+            || AwsCommand::send_shell_script_command(&self.profile, &self.instance_id, script),
+        )?;
+
+        let cmd_id = cmd_output.command.command_id;
+
+        with_spinner(
+            format!(
+                "waiting for the SSM command on {} to finish",
+                dim_under(&self.instance_id)
+            ),
+            || AwsCommand::wait_command_executed(&self.profile, &cmd_id, &self.instance_id),
+        )?;
+
+        let invocation = with_spinner("getting SSM shell command result", || {
+            AwsCommand::get_command_invocation(&self.profile, &cmd_id, &self.instance_id)
+        })?;
+
+        let resolve = |str: Option<String>| str.filter(|v| !v.is_empty());
+
+        if invocation.status != "Success" {
+            let mut err_msg = "SSM shell command unsuccessful".to_string();
+
+            if let Some(cmd_stdout) = resolve(invocation.standard_output_content) {
+                err_msg.push_str(&format!("\nstdout: {cmd_stdout}"));
+            }
+
+            if let Some(cmd_stderr) = resolve(invocation.standard_error_content) {
+                err_msg.push_str(&format!("\nstderr: {cmd_stderr}"));
+            }
+
+            bail!("{err_msg}");
+        }
+
+        if let Some(cmd_stdout) = resolve(invocation.standard_output_content) {
+            logger_info!("SSM shell stdout:");
+            println!("{cmd_stdout}");
+        }
+
+        if let Some(cmd_stderr) = resolve(invocation.standard_error_content) {
+            logger_warn!("SSM shell stderr:");
+            println!("{cmd_stderr}");
+        }
+
         Ok(())
     }
 
@@ -132,6 +230,7 @@ impl Ec2Instance {
     /// instance profile with SSM permissions - if not, the send-command
     /// call itself will fail with a clear error from the CLI.
     pub fn schedule_shutdown(&self, minutes: i64, target_time: &str) -> Result<()> {
+        // TODO: let's also add this to a shell script file and import it at compile time
         let script = format!(
             "if show=$(shutdown --show 2>&1); then \
                 echo 'Shutdown already scheduled, leaving it as-is:'; \
@@ -142,49 +241,44 @@ impl Ec2Instance {
              fi"
         );
 
-        println!(
-            "Sending SSM command to schedule shutdown on {}...",
-            self.instance_id
-        );
-        let params = format!("commands=[\"{script}\"]");
-        let send_output =
-            AwsCommand::send_shell_script_command(&self.profile, &self.instance_id, &params)?;
-        let command_id = send_output.command.command_id;
-
-        let wait_result = with_spinner(
-            &format!(
-                "Waiting for the SSM command on {} to finish...",
-                self.instance_id
-            ),
-            || AwsCommand::wait_command_executed(&self.profile, &command_id, &self.instance_id),
-        );
-
-        let invocation: CommandInvocation =
-            AwsCommand::get_command_invocation(&self.profile, &command_id, &self.instance_id)?;
-
-        if let Some(stdout) = invocation.standard_output_content.as_deref() {
-            let stdout = stdout.trim();
-            if !stdout.is_empty() {
-                println!("{stdout}");
-            }
-        }
-
-        if wait_result.is_err() {
-            bail!(
-                "SSM command to schedule shutdown on {} did not succeed \
-                 (status: {}): {}",
-                self.instance_id,
-                invocation.status,
-                invocation
-                    .standard_error_content
-                    .as_deref()
-                    .unwrap_or_default()
-                    .trim()
-            );
-        }
+        self.run_ssm_shell_script(&script)?;
 
         Ok(())
     }
+
+    /// Installs `public_key` into the instance's `ec2-user`
+    /// `authorized_keys` over SSM Run Command. Starts the instance first if
+    /// it isn't already running (without printing an "already running"
+    /// notice), since SSM Run Command requires it. Requires the SSM Agent
+    /// and an instance profile granting SSM permissions.
+    pub fn push_public_key(&self, script: &str) -> Result<()> {
+        self.start_and_wait(false)?;
+
+        logger_info!(
+            "installing the public key on {} via SSM",
+            dim_under(&self.instance_id)
+        );
+
+        self.run_ssm_shell_script(script)?;
+
+        logger_success!("installed public key");
+
+        Ok(())
+    }
+}
+
+/// Opens an SSH-over-SSM tunnel to `instance_id` for use as an SSH
+/// `ProxyCommand`. This runs inside the SSH transport: stdin/stdout carry the
+/// SSH byte stream, so it must not write to stdout and must not launch an
+/// interactive SSO login (which would corrupt the stream and can't read
+/// input). If credentials are missing/expired it fails fast with guidance on
+/// stderr so `ssh` reports a clean error.
+pub fn start_ssh_proxy(profile: &str, instance_id: &str, port: u16) -> Result<()> {
+    if !is_logged_in(profile)? {
+        bail!("profile {profile} is not logged in");
+    }
+
+    AwsCommand::start_ssh_session(profile, instance_id, port)
 }
 
 pub fn list_profiles() -> Result<Vec<String>> {
@@ -193,10 +287,7 @@ pub fn list_profiles() -> Result<Vec<String>> {
     let profiles = parse_profiles(&stdout);
 
     if profiles.is_empty() {
-        bail!(
-            "No AWS CLI profiles found. Run `aws configure` (or `aws configure sso`) \
-             to set one up first."
-        );
+        bail!("no AWS CLI profiles found, make sure it's configured");
     }
 
     Ok(profiles)
@@ -216,7 +307,7 @@ fn parse_profiles(stdout: &str) -> Vec<String> {
 /// Runs `describe-instances`, optionally scoped to a single instance
 /// ID, mapping the result down to `InstanceEntry`.
 pub fn describe_instances(profile: &str, with_id: Option<&str>) -> Result<Vec<InstanceEntry>> {
-    let out = with_spinner("Fetching instances...", || {
+    let out = with_spinner("fetching instances", || {
         AwsCommand::describe_instances(profile, with_id).context("failed to describe instances")
     })?;
 

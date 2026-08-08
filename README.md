@@ -3,7 +3,7 @@
 A small utility tool for AWS CLI dedicated to managing EC2 instance
 state, SSO login and first time setup for devs.
 
-`awsome` remembers one or more profile+instance pairs in a small config
+It remembers one or more profile+instance pairs in a small config
 file next to the executable, so day-to-day usage for login + starting
 instances is just:
 
@@ -11,7 +11,8 @@ instances is just:
 awsome
 ```
 
-For more run:
+For more details on available commands check out
+[`cli.rs`](./src/cli.rs) or run the following:
 
 ```sh
 awsome help

@@ -2,11 +2,10 @@ use clap::{Parser, Subcommand};
 
 /// Starts a configured EC2 instance (waiting for it to reach the
 /// `running` state), reading profile/instance groups from a config file
-/// next to the executable. `start`/`stop` act on whichever group is
+/// next to the executable. `start`, `stop`, and `setup-ssh` act on whichever group is
 /// currently selected (see `configure select`); the selection is sticky
-/// and persisted, so no prompting happens outside of `configure`. If no
-/// config exists yet, prints a message telling you to run `configure`
-/// first.
+/// and persisted, so no prompting happens outside of `configure`. Instance
+/// commands fail if no group has been configured yet.
 #[derive(Parser)]
 #[command(
     name = "awsome",
@@ -51,6 +50,27 @@ pub enum Command {
     /// Stop a configured EC2 instance (waiting for it to reach the
     /// `stopped` state) instead of starting it.
     Stop,
+
+    /// Set up SSH access to the currently selected instance: ensures a
+    /// dedicated local key exists, pushes its public half to the
+    /// instance's `ec2-user` (over SSM Run Command), and writes a
+    /// managed `Host awsome` entry to your `~/.ssh/config` whose
+    /// `ProxyCommand` tunnels SSH through SSM. After running this once,
+    /// `ssh awsome` connects to whichever group is currently selected
+    /// (see `configure select`) - switch targets without editing any SSH
+    /// config.
+    SetupSsh,
+
+    /// The SSH `ProxyCommand` used by the generated `~/.ssh/config` entry.
+    /// You normally don't run this by hand - `ssh awsome` invokes it for you.
+    /// It opens an SSH-over-SSM tunnel (`aws ssm start-session` with the
+    /// `AWS-StartSSHSession` document) to the currently selected instance and
+    /// bridges it to SSH via stdio.
+    SshProxy {
+        /// TCP port SSH wants to reach on the instance (passed by `ssh` as
+        /// `%p`; usually 22).
+        port: u16,
+    },
 }
 
 #[derive(Subcommand)]

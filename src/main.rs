@@ -3,23 +3,26 @@ mod cli;
 mod client;
 mod config;
 mod interactive;
+mod logger;
 mod schedule;
 mod signal;
 mod spinner;
+mod ssh_setup;
 
 use anyhow::Result;
 use clap::Parser;
-use console::style;
 
-use cli::{Cli, Command};
-use config::AwsomeConfig;
-
-use crate::client::Ec2Instance;
+use cli::{Cli, Command, ConfigureAction};
+use client::{Ec2Instance, start_ssh_proxy};
+use config::{AwsomeConfig, ProfileGroup};
+use ssh_setup::setup_ssh;
 
 fn main() -> Result<()> {
     signal::install_ctrlc_handler()?;
 
     let cli = Cli::parse();
+
+    let is_command_default = cli.command.is_none();
     let command = cli.command.unwrap_or(Command::Start {
         schedule_shutdown: None,
     });
@@ -28,45 +31,34 @@ fn main() -> Result<()> {
 
     if let Command::Configure { action } = command {
         return match action {
-            cli::ConfigureAction::Add {
+            ConfigureAction::Show => {
+                println!("{config}");
+                Ok(())
+            }
+
+            ConfigureAction::Select { index } => config.set_selected(index),
+
+            ConfigureAction::Add {
                 profile,
                 instance_id,
             } => config.add(profile, instance_id),
 
-            cli::ConfigureAction::Remove { index } => config.remove(index),
-
-            cli::ConfigureAction::Show => {
-                config.show();
-                Ok(())
-            }
-
-            cli::ConfigureAction::Select { index } => config.set_selected(index),
+            ConfigureAction::Remove { index } => config.remove(index),
         };
     }
 
-    if config.is_empty() {
-        println!("⚠️ No configuration found. Run `awsome configure add` first.");
-        return Ok(());
-    }
-
-    let selected_conf = config.selected_group()?;
-    let profile = &selected_conf.profile;
-    let instance_id = &selected_conf.instance_id;
+    let ProfileGroup {
+        profile,
+        instance_id,
+    } = config.get_selected()?;
 
     match command {
+        Command::Configure { .. } => unreachable!("already handled"),
+
         Command::Start { schedule_shutdown } => {
             let ec2 = Ec2Instance::new_logged_in(profile, instance_id)?;
 
-            if let Some(state) = ec2.state()?
-                && state == "running"
-            {
-                println!(
-                    "Instance {instance_id} is already {}.",
-                    style("running").green()
-                );
-            } else {
-                ec2.start_and_wait()?;
-            }
+            ec2.start_and_wait(!is_command_default)?;
 
             if let Some(time_str) = schedule_shutdown {
                 let (minutes, target_time) = schedule::minutes_until_next(&time_str)?;
@@ -76,25 +68,13 @@ fn main() -> Result<()> {
             Ok(())
         }
 
-        Command::Stop => {
+        Command::Stop => Ec2Instance::new_logged_in(profile, instance_id)?.stop_and_wait(true),
+
+        Command::SetupSsh => {
             let ec2 = Ec2Instance::new_logged_in(profile, instance_id)?;
-
-            if let Some(state) = ec2.state()?
-                && state == "stopped"
-            {
-                println!(
-                    "Instance {instance_id} is already {}.",
-                    style("stopped").red()
-                );
-            } else {
-                ec2.stop_and_wait()?;
-            }
-
-            Ok(())
+            setup_ssh(|script| ec2.push_public_key(script))
         }
 
-        Command::Configure { .. } => {
-            unreachable!("already handled above")
-        }
+        Command::SshProxy { port } => start_ssh_proxy(profile, instance_id, port),
     }
 }

@@ -20,21 +20,24 @@ awsome help
 
 ## Requirements
 
-- The [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
-  installed and available on `PATH`.
-- One or more AWS CLI profiles already configured (`aws configure
---profile <name>`, or SSO) with permission to describe/start/stop the
-  target EC2 instance(s).
+- [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
+- [Session Manager plugin for the AWS CLI](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)
+- One or more AWS CLI profiles already configured
 
-## Download
+## Install (Windows x64)
 
-Pre-built binaries are published on the
-[**latest release**](https://github.com/lfod26/awsome/releases/latest)
-page. Grab the asset for your platform:
+```powershell
+irm https://raw.githubusercontent.com/lfod26/awsome/main/scripts/install.ps1 | iex
+```
 
-Currently the build is done for:
+### Uninstalling
 
-- Windows (x86_64)
-- macOS (Apple Silicon / ARM)
+1. Delete the install directory:
+   ```powershell
+   Remove-Item -Recurse -Force "$env:USERPROFILE\.awsome"
+   ```
+2. Remove `%USERPROFILE%\.awsome` from your PATH via System Settings.
+
+---
 
 Don't see your platform/arch? Raise an issue or build it from source via the Rust toolchain.

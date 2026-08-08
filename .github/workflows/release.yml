@@ -29,9 +29,10 @@ jobs:
           - os: windows-latest
             asset_suffix: windows-x86_64
             binary_ext: .exe
-          - os: macos-latest
-            asset_suffix: macos-aarch64
-            binary_ext: ""
+          # Add more platforms here later, e.g.:
+          # - os: macos-latest
+          #   asset_suffix: macos-aarch64
+          #   binary_ext: ""
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out repository

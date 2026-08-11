@@ -11,6 +11,8 @@ instances is just:
 awsome
 ```
 
+<video src="./demo.mp4" controls autoplay loop></video>
+
 For more details on available commands check out
 [`cli.rs`](./src/cli.rs) or run the following:
 

@@ -26,7 +26,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: windows-latest
+          - os: ubuntu-latest
             asset_suffix: windows-x86_64
             binary_ext: .exe
           # Add more platforms here later, e.g.:
@@ -43,9 +43,25 @@ jobs:
         with:
           test: "false"
 
+      - name: Install Windows cross-compilation target
+        shell: bash
+        run: rustup target add x86_64-pc-windows-gnu
+
+      - name: Install MinGW-w64 linker
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64
+          # Rust's windows-gnu target needs the POSIX-threads variant
+          # (winpthread); pin it explicitly since the system default
+          # alternative can otherwise resolve to the win32 variant and
+          # break linking with "undefined reference to pthread_*".
+          sudo update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix
+          sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix
+
       - name: Build release binary
         shell: bash
-        run: cargo build --release --locked
+        run: cargo build --release --locked --target x86_64-pc-windows-gnu
 
       - name: Rename binary with version
         id: rename
@@ -56,7 +72,7 @@ jobs:
           BINARY_EXT: ${{ matrix.binary_ext }}
         run: |
           asset_name="awsome-$VERSION-$ASSET_SUFFIX$BINARY_EXT"
-          cp "target/release/awsome$BINARY_EXT" "$asset_name"
+          cp "target/x86_64-pc-windows-gnu/release/awsome$BINARY_EXT" "$asset_name"
           echo "asset_name=$asset_name" >> "$GITHUB_OUTPUT"
 
       - name: Upload build artifact
